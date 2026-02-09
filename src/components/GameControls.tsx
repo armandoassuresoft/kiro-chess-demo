@@ -9,25 +9,26 @@ export interface GameControlsProps {
   onUndo: () => void;
 }
 
-const getStatusMessage = (status: GameStatus): string => {
+const getStatusMessage = (status: GameStatus): { message: string; type: string } => {
   switch (status.type) {
     case 'active':
-      return status.inCheck ? 'Check!' : '';
+      return status.inCheck 
+        ? { message: 'Check!', type: 'check' }
+        : { message: '', type: '' };
     case 'checkmate':
-      return `Checkmate! ${status.winner === 'white' ? 'White' : 'Black'} wins!`;
+      return { 
+        message: `Checkmate! ${status.winner === 'white' ? 'White' : 'Black'} wins!`,
+        type: 'checkmate'
+      };
     case 'draw':
+      let reason = 'Draw';
       switch (status.reason) {
-        case 'stalemate':
-          return 'Draw by stalemate';
-        case 'insufficient-material':
-          return 'Draw by insufficient material';
-        case 'threefold-repetition':
-          return 'Draw by threefold repetition';
-        case 'fifty-move-rule':
-          return 'Draw by fifty-move rule';
-        default:
-          return 'Draw';
+        case 'stalemate': reason = 'Draw by stalemate'; break;
+        case 'insufficient-material': reason = 'Draw by insufficient material'; break;
+        case 'threefold-repetition': reason = 'Draw by threefold repetition'; break;
+        case 'fifty-move-rule': reason = 'Draw by fifty-move rule'; break;
       }
+      return { message: reason, type: 'draw' };
   }
 };
 
@@ -38,116 +39,43 @@ export const GameControls: React.FC<GameControlsProps> = ({
   onNewGame,
   onUndo,
 }) => {
-  const containerStyle: React.CSSProperties = {
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    gap: '16px',
-    padding: '20px',
-    backgroundColor: '#f5f5f5',
-    borderRadius: '8px',
-    minWidth: '200px',
-  };
-
-  const turnIndicatorStyle: React.CSSProperties = {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '10px',
-    fontSize: '18px',
-    fontWeight: 'bold',
-  };
-
-  const colorIndicatorStyle: React.CSSProperties = {
-    width: '24px',
-    height: '24px',
-    borderRadius: '50%',
-    backgroundColor: currentPlayer === 'white' ? '#fff' : '#000',
-    border: '2px solid #333',
-  };
-
-  const statusStyle: React.CSSProperties = {
-    fontSize: '16px',
-    fontWeight: 'bold',
-    color: gameStatus.type === 'checkmate' ? '#e74c3c' : 
-           gameStatus.type === 'draw' ? '#f39c12' :
-           (gameStatus.type === 'active' && gameStatus.inCheck) ? '#e74c3c' : '#333',
-    textAlign: 'center',
-    minHeight: '24px',
-  };
-
-  const buttonContainerStyle: React.CSSProperties = {
-    display: 'flex',
-    gap: '10px',
-  };
-
-  const buttonStyle: React.CSSProperties = {
-    padding: '10px 20px',
-    fontSize: '14px',
-    fontWeight: 'bold',
-    border: 'none',
-    borderRadius: '4px',
-    cursor: 'pointer',
-    transition: 'all 0.2s',
-  };
-
-  const newGameButtonStyle: React.CSSProperties = {
-    ...buttonStyle,
-    backgroundColor: '#4caf50',
-    color: '#fff',
-  };
-
-  const undoButtonStyle: React.CSSProperties = {
-    ...buttonStyle,
-    backgroundColor: canUndo ? '#2196f3' : '#ccc',
-    color: '#fff',
-    cursor: canUndo ? 'pointer' : 'not-allowed',
-  };
-
   const isGameOver = gameStatus.type !== 'active';
-  const statusMessage = getStatusMessage(gameStatus);
+  const { message: statusMessage, type: statusType } = getStatusMessage(gameStatus);
 
   return (
-    <div style={containerStyle} data-testid="game-controls">
+    <div className="game-controls" data-testid="game-controls">
       {!isGameOver && (
-        <div style={turnIndicatorStyle} data-testid="turn-indicator">
-          <div style={colorIndicatorStyle} data-testid={`${currentPlayer}-indicator`} />
+        <div className="turn-indicator" data-testid="turn-indicator">
+          <div 
+            className={`turn-indicator__color turn-indicator__color--${currentPlayer}`}
+            data-testid={`${currentPlayer}-indicator`} 
+          />
           <span>{currentPlayer === 'white' ? 'White' : 'Black'}'s turn</span>
         </div>
       )}
       
       {statusMessage && (
-        <div style={statusStyle} data-testid="game-status">
+        <div 
+          className={`game-status game-status--${statusType}`}
+          data-testid="game-status"
+        >
           {statusMessage}
         </div>
       )}
 
-      <div style={buttonContainerStyle}>
+      <div className="button-container">
         <button
-          style={newGameButtonStyle}
+          className="btn btn--new-game"
           onClick={onNewGame}
           data-testid="new-game-button"
-          onMouseEnter={e => {
-            e.currentTarget.style.backgroundColor = '#45a049';
-          }}
-          onMouseLeave={e => {
-            e.currentTarget.style.backgroundColor = '#4caf50';
-          }}
         >
           New Game
         </button>
         <button
-          style={undoButtonStyle}
+          className="btn btn--undo"
           onClick={onUndo}
           disabled={!canUndo}
           data-testid="undo-button"
-          onMouseEnter={e => {
-            if (canUndo) {
-              e.currentTarget.style.backgroundColor = '#1976d2';
-            }
-          }}
-          onMouseLeave={e => {
-            e.currentTarget.style.backgroundColor = canUndo ? '#2196f3' : '#ccc';
-          }}
         >
           Undo
         </button>

@@ -9,3 +9,7 @@ export type { PromotionDialogProps } from './PromotionDialog';
 
 export { GameControls } from './GameControls';
 export type { GameControlsProps } from './GameControls';
+
+export { CapturedPieces } from './CapturedPieces';
+export { MoveHistory } from './MoveHistory';
+export { MaterialAdvantage } from './MaterialAdvantage';

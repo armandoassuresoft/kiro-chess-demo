@@ -9,11 +9,8 @@ import type {
 } from '../engine/types';
 import { ChessEngine } from '../engine/chessEngine';
 import { getPiece, getKingSquare } from '../engine/boardUtils';
+import { chessSounds } from '../utils/sounds';
 
-/**
- * Return type for the useChessGame hook.
- * Requirements: 1.5, 1.6, 2.1, 2.2, 2.3
- */
 export interface UseChessGameReturn {
   gameState: GameState;
   selectedSquare: Square | null;
@@ -21,67 +18,96 @@ export interface UseChessGameReturn {
   pendingPromotion: PendingPromotion | null;
   gameStatus: GameStatus;
   kingInCheck: Square | null;
+  lastMove: { from: Square; to: Square } | null;
+  isFlipped: boolean;
+  soundEnabled: boolean;
 
   selectSquare: (square: Square) => void;
   makeMove: (to: Square) => void;
+  handleDragMove: (from: Square, to: Square) => void;
   selectPromotion: (pieceType: PromotablePiece) => void;
   newGame: () => void;
   undoMove: () => void;
+  flipBoard: () => void;
+  toggleSound: () => void;
+  navigateMove: (direction: 'first' | 'prev' | 'next' | 'last') => void;
+  exportPGN: () => string;
 }
 
-/**
- * Compare two squares for equality.
- */
 function squaresEqual(a: Square | null, b: Square | null): boolean {
   if (a === null || b === null) return a === b;
   return a.file === b.file && a.rank === b.rank;
 }
 
-/**
- * useChessGame hook - bridges UI with the chess engine.
- * Manages piece selection, move execution, and game state.
- * Requirements: 1.5, 1.6, 2.1, 2.2, 2.3
- */
 export function useChessGame(): UseChessGameReturn {
-  // Use ref to maintain engine instance across renders
   const engineRef = useRef<ChessEngine | null>(null);
   
-  // Initialize engine on first render
   if (engineRef.current === null) {
     engineRef.current = new ChessEngine();
   }
   
   const engine = engineRef.current;
 
-  // Game state
   const [gameState, setGameState] = useState<GameState>(() => engine.getState());
   const [selectedSquare, setSelectedSquare] = useState<Square | null>(null);
   const [pendingPromotion, setPendingPromotion] = useState<PendingPromotion | null>(null);
+  const [lastMove, setLastMove] = useState<{ from: Square; to: Square } | null>(null);
+  const [isFlipped, setIsFlipped] = useState(false);
+  const [soundEnabled, setSoundEnabled] = useState(true);
 
-  // Subscribe to engine events
   useEffect(() => {
     const unsubscribe = engine.subscribe(event => {
       switch (event.type) {
-        case 'move-made':
-        case 'game-started':
-          setGameState(event.type === 'move-made' ? event.newState : event.state);
+        case 'move-made': {
+          setGameState(event.newState);
           setSelectedSquare(null);
+          setLastMove({ from: event.move.move.from, to: event.move.move.to });
+          
+          // Play appropriate sound
+          if (soundEnabled) {
+            if (event.move.isCheckmate) {
+              chessSounds.checkmate();
+            } else if (event.move.isCheck) {
+              chessSounds.check();
+            } else if (event.move.isCastling) {
+              chessSounds.castle();
+            } else if (event.move.move.promotion) {
+              chessSounds.promote();
+            } else if (event.move.captured) {
+              chessSounds.capture();
+            } else {
+              chessSounds.move();
+            }
+          }
+          break;
+        }
+        case 'game-started':
+          setGameState(event.state);
+          setSelectedSquare(null);
+          setLastMove(null);
+          if (soundEnabled) chessSounds.gameStart();
           break;
         case 'move-undone':
           setGameState(event.previousState);
           setSelectedSquare(null);
           setPendingPromotion(null);
+          // Update last move after undo
+          const history = event.previousState.moveHistory;
+          if (history.length > 0) {
+            const lastRecord = history[history.length - 1];
+            setLastMove({ from: lastRecord.move.from, to: lastRecord.move.to });
+          } else {
+            setLastMove(null);
+          }
           break;
       }
     });
 
     return unsubscribe;
-  }, [engine]);
+  }, [engine, soundEnabled]);
 
-  // Compute game status
   const gameStatus = useMemo(() => engine.getGameStatus(), [gameState]);
 
-  // Compute king in check square for UI highlighting
   const kingInCheck = useMemo(() => {
     if (gameStatus.type === 'active' && gameStatus.inCheck) {
       return getKingSquare(gameState.board, gameState.currentPlayer);
@@ -89,7 +115,6 @@ export function useChessGame(): UseChessGameReturn {
     return null;
   }, [gameState, gameStatus]);
 
-  // Compute legal moves for selected piece
   const legalMoves = useMemo(() => {
     if (!selectedSquare || pendingPromotion) {
       return [];
@@ -99,114 +124,81 @@ export function useChessGame(): UseChessGameReturn {
     return moves.map(move => move.to);
   }, [selectedSquare, pendingPromotion, engine, gameState]);
 
-  /**
-   * Handle square selection.
-   * - If no piece is selected and clicked square has current player's piece, select it
-   * - If a piece is selected and clicked square is a legal move, execute the move
-   * - If a piece is selected and clicked square has current player's piece, switch selection
-   * - Otherwise, deselect
-   * Requirements: 1.5, 1.6
-   */
+  const executeMove = useCallback((from: Square, to: Square) => {
+    const currentStatus = engine.getGameStatus();
+    if (currentStatus.type !== 'active') return false;
+
+    const currentState = engine.getState();
+    const moves = engine.getLegalMoves(from);
+    const targetMove = moves.find(m => m.to.file === to.file && m.to.rank === to.rank);
+
+    if (!targetMove) {
+      if (soundEnabled) chessSounds.illegal();
+      return false;
+    }
+
+    // Check for pawn promotion
+    const piece = getPiece(currentState.board, from);
+    if (piece?.type === 'pawn') {
+      const promotionRank = currentState.currentPlayer === 'white' ? 8 : 1;
+      if (to.rank === promotionRank) {
+        setPendingPromotion({
+          from,
+          to,
+          color: currentState.currentPlayer,
+        });
+        return true;
+      }
+    }
+
+    engine.makeMove(targetMove);
+    return true;
+  }, [engine, soundEnabled]);
+
   const selectSquare = useCallback((square: Square) => {
-    // Don't allow selection during pending promotion or if game is over
     const currentStatus = engine.getGameStatus();
     if (pendingPromotion || currentStatus.type !== 'active') {
       return;
     }
 
-    // Read current state directly from engine to avoid stale state issues
     const currentState = engine.getState();
     const piece = getPiece(currentState.board, square);
     const currentPlayer = currentState.currentPlayer;
 
-    // If no piece is currently selected
     if (!selectedSquare) {
-      // Select if it's the current player's piece
       if (piece && piece.color === currentPlayer) {
         setSelectedSquare(square);
       }
       return;
     }
 
-    // If clicking the same square, deselect
     if (squaresEqual(selectedSquare, square)) {
       setSelectedSquare(null);
       return;
     }
 
-    // Check if the clicked square is a legal move destination
-    const moves = engine.getLegalMoves(selectedSquare);
-    const targetMove = moves.find(m => m.to.file === square.file && m.to.rank === square.rank);
-
-    if (targetMove) {
-      // Check if this is a pawn promotion move
-      const selectedPiece = getPiece(currentState.board, selectedSquare);
-      if (selectedPiece?.type === 'pawn') {
-        const promotionRank = currentPlayer === 'white' ? 8 : 1;
-        if (square.rank === promotionRank) {
-          // Set pending promotion state
-          setPendingPromotion({
-            from: selectedSquare,
-            to: square,
-            color: currentPlayer,
-          });
-          return;
-        }
-      }
-
-      // Execute the move
-      engine.makeMove(targetMove);
-    } else if (piece && piece.color === currentPlayer) {
-      // Switch selection to another piece of the same color
+    // Try to execute move
+    const moved = executeMove(selectedSquare, square);
+    
+    if (!moved && piece && piece.color === currentPlayer) {
+      // Switch selection to another piece
       setSelectedSquare(square);
-    } else {
-      // Deselect
+    } else if (!moved) {
       setSelectedSquare(null);
     }
-  }, [selectedSquare, pendingPromotion, engine]);
+  }, [selectedSquare, pendingPromotion, engine, executeMove]);
 
-  /**
-   * Execute a move to the target square.
-   * This is called when clicking on a legal move destination.
-   * Requirements: 2.2, 2.3
-   */
+  const handleDragMove = useCallback((from: Square, to: Square) => {
+    executeMove(from, to);
+  }, [executeMove]);
+
   const makeMove = useCallback((to: Square) => {
-    const currentStatus = engine.getGameStatus();
-    if (!selectedSquare || pendingPromotion || currentStatus.type !== 'active') {
-      return;
-    }
+    if (!selectedSquare || pendingPromotion) return;
+    executeMove(selectedSquare, to);
+  }, [selectedSquare, pendingPromotion, executeMove]);
 
-    const currentState = engine.getState();
-    const moves = engine.getLegalMoves(selectedSquare);
-    const targetMove = moves.find(m => m.to.file === to.file && m.to.rank === to.rank);
-
-    if (targetMove) {
-      // Check if this is a pawn promotion move
-      const selectedPiece = getPiece(currentState.board, selectedSquare);
-      if (selectedPiece?.type === 'pawn') {
-        const promotionRank = currentState.currentPlayer === 'white' ? 8 : 1;
-        if (to.rank === promotionRank) {
-          setPendingPromotion({
-            from: selectedSquare,
-            to,
-            color: currentState.currentPlayer,
-          });
-          return;
-        }
-      }
-
-      engine.makeMove(targetMove);
-    }
-  }, [selectedSquare, pendingPromotion, engine]);
-
-  /**
-   * Handle promotion piece selection.
-   * Requirements: 6.2, 6.3
-   */
   const selectPromotion = useCallback((pieceType: PromotablePiece) => {
-    if (!pendingPromotion) {
-      return;
-    }
+    if (!pendingPromotion) return;
 
     const move: Move = {
       from: pendingPromotion.from,
@@ -218,25 +210,60 @@ export function useChessGame(): UseChessGameReturn {
     setPendingPromotion(null);
   }, [pendingPromotion, engine]);
 
-  /**
-   * Start a new game.
-   * Requirements: 12.2
-   */
   const newGame = useCallback(() => {
     engine.newGame();
     setSelectedSquare(null);
     setPendingPromotion(null);
+    setLastMove(null);
   }, [engine]);
 
-  /**
-   * Undo the last move.
-   * Requirements: 12.4, 12.5
-   */
   const undoMove = useCallback(() => {
     engine.undoMove();
     setSelectedSquare(null);
     setPendingPromotion(null);
   }, [engine]);
+
+  const flipBoard = useCallback(() => {
+    setIsFlipped(prev => !prev);
+  }, []);
+
+  const toggleSound = useCallback(() => {
+    setSoundEnabled(prev => {
+      chessSounds.setEnabled(!prev);
+      return !prev;
+    });
+  }, []);
+
+  const navigateMove = useCallback((direction: 'first' | 'prev' | 'next' | 'last') => {
+    // For now, just a placeholder - would need view-only state to implement fully
+    console.log('Navigate:', direction);
+  }, []);
+
+  const exportPGN = useCallback((): string => {
+    const history = gameState.moveHistory;
+    if (history.length === 0) return '';
+
+    const moves: string[] = [];
+    history.forEach((record, idx) => {
+      const moveNum = Math.floor(idx / 2) + 1;
+      const notation = getMoveNotation(record);
+      
+      if (idx % 2 === 0) {
+        moves.push(`${moveNum}. ${notation}`);
+      } else {
+        moves[moves.length - 1] += ` ${notation}`;
+      }
+    });
+
+    let result = '*';
+    if (gameStatus.type === 'checkmate') {
+      result = gameStatus.winner === 'white' ? '1-0' : '0-1';
+    } else if (gameStatus.type === 'draw') {
+      result = '1/2-1/2';
+    }
+
+    return `[Event "Casual Game"]\n[Date "${new Date().toISOString().split('T')[0]}"]\n[Result "${result}"]\n\n${moves.join(' ')} ${result}`;
+  }, [gameState.moveHistory, gameStatus]);
 
   return {
     gameState,
@@ -245,12 +272,50 @@ export function useChessGame(): UseChessGameReturn {
     pendingPromotion,
     gameStatus,
     kingInCheck,
+    lastMove,
+    isFlipped,
+    soundEnabled,
     selectSquare,
     makeMove,
+    handleDragMove,
     selectPromotion,
     newGame,
     undoMove,
+    flipBoard,
+    toggleSound,
+    navigateMove,
+    exportPGN,
   };
+}
+
+function getMoveNotation(record: import('../engine/types').MoveRecord): string {
+  const { move, piece, captured, isCheck, isCheckmate, isCastling } = record;
+
+  if (isCastling) {
+    const notation = isCastling === 'kingside' ? 'O-O' : 'O-O-O';
+    if (isCheckmate) return notation + '#';
+    if (isCheck) return notation + '+';
+    return notation;
+  }
+
+  let notation = '';
+  const pieceLetters: Record<string, string> = {
+    king: 'K', queen: 'Q', rook: 'R', bishop: 'B', knight: 'N', pawn: ''
+  };
+  
+  notation += pieceLetters[piece.type];
+  if (piece.type === 'pawn' && captured) {
+    notation += move.from.file;
+  }
+  if (captured) notation += 'x';
+  notation += `${move.to.file}${move.to.rank}`;
+  if (move.promotion) {
+    notation += '=' + pieceLetters[move.promotion];
+  }
+  if (isCheckmate) notation += '#';
+  else if (isCheck) notation += '+';
+
+  return notation;
 }
 
 export default useChessGame;
